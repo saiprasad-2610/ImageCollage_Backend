@@ -25,8 +25,8 @@ public class CollageService {
     private String uploadDir;
 
     // --- OPTIMIZED VALUES FOR MEMORY ---
-    private static final int MAX_OUTPUT_WIDTH = 4000;  // Limit final collage width (px)
-    private static final int MAX_OUTPUT_HEIGHT = 4000; // Limit final collage height (px)
+//    private static final int MAX_OUTPUT_WIDTH = 4000;  // Limit final collage width (px)
+//    private static final int MAX_OUTPUT_HEIGHT = 4000; // Limit final collage height (px)
     private static final int RESIZE_WIDTH = 300;       // Smaller base grid width
     private static final int TILE_SIZE = 80;           // Smaller tile size
     private static final float CONTRAST_ENHANCE = 5.0f;
