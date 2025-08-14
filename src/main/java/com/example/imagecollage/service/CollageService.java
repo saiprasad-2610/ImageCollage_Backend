@@ -24,48 +24,50 @@ public class CollageService {
     @Value("${image.upload.dir}")
     private String uploadDir;
 
-    // --- OPTIMIZED VALUES FOR MEMORY ---
-//    private static final int MAX_OUTPUT_WIDTH = 4000;  // Limit final collage width (px)
-//    private static final int MAX_OUTPUT_HEIGHT = 4000; // Limit final collage height (px)
-    private static final int RESIZE_WIDTH = 300;       // Smaller base grid width
-    private static final int TILE_SIZE = 80;           // Smaller tile size
+    // --- VALUES FOR HIGH RESOLUTION AND CLARITY ---
+    private static final int RESIZE_WIDTH = 300;   // Grid width (higher = more detail)
+    private static final int TILE_SIZE = 80;       // Each signature tile size
     private static final float CONTRAST_ENHANCE = 5.0f;
     private static final float VISIBILITY_FACTOR = 0.5f;
     private static final double SIGNATURE_THRESHOLD = 0.5;
+
+    // Safety cap (downscaling after rendering, not during tiling)
+    private static final int MAX_OUTPUT_WIDTH = 4000;
+    private static final int MAX_OUTPUT_HEIGHT = 4000;
 
     @Autowired
     private CollageRepository collageRepository;
 
     public byte[] createCollage(MultipartFile portraitFile, MultipartFile signatureFile) throws IOException {
 
-        // Ensure upload dir exists
+        // Ensure the upload directory exists
         Path uploadPath = Paths.get(uploadDir);
         if (!Files.exists(uploadPath)) {
             Files.createDirectories(uploadPath);
         }
 
-        // Load portrait & signature
+        // Load portrait and signature
         BufferedImage portraitImg = ImageIO.read(portraitFile.getInputStream());
         BufferedImage signatureImg = ImageIO.read(signatureFile.getInputStream());
 
-        // Calculate proportional height for small portrait
+        // Maintain aspect ratio for portrait
         int resizeHeight = (int) (RESIZE_WIDTH * (double) portraitImg.getHeight() / portraitImg.getWidth());
 
-        // STEP 1: Resize portrait
+        // --- STEP 1: Resize portrait ---
         BufferedImage smallPortrait = new BufferedImage(RESIZE_WIDTH, resizeHeight, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2dPortrait = smallPortrait.createGraphics();
         g2dPortrait.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
         g2dPortrait.drawImage(portraitImg, 0, 0, RESIZE_WIDTH, resizeHeight, null);
         g2dPortrait.dispose();
 
-        // STEP 2: Resize signature
+        // --- STEP 2: Resize signature ---
         BufferedImage signatureTile = new BufferedImage(TILE_SIZE, TILE_SIZE, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2dSignature = signatureTile.createGraphics();
         g2dSignature.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         g2dSignature.drawImage(signatureImg, 0, 0, TILE_SIZE, TILE_SIZE, null);
         g2dSignature.dispose();
 
-        // STEP 3: Enhance contrast for signature
+        // Enhance contrast of signature
         for (int y = 0; y < TILE_SIZE; y++) {
             for (int x = 0; x < TILE_SIZE; x++) {
                 Color c = new Color(signatureTile.getRGB(x, y));
@@ -76,21 +78,17 @@ public class CollageService {
             }
         }
 
-        // STEP 4: Calculate final collage size with safety cap
+        // --- STEP 3: Build full-resolution collage ---
         int collageWidth = RESIZE_WIDTH * TILE_SIZE;
         int collageHeight = resizeHeight * TILE_SIZE;
-        if (collageWidth > MAX_OUTPUT_WIDTH) collageWidth = MAX_OUTPUT_WIDTH;
-        if (collageHeight > MAX_OUTPUT_HEIGHT) collageHeight = MAX_OUTPUT_HEIGHT;
 
         BufferedImage canvas = new BufferedImage(collageWidth, collageHeight, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2dCanvas = canvas.createGraphics();
 
-        // STEP 5: Draw tiles
-        for (int y = 0; y < resizeHeight && y * TILE_SIZE < MAX_OUTPUT_HEIGHT; y++) {
-            for (int x = 0; x < RESIZE_WIDTH && x * TILE_SIZE < MAX_OUTPUT_WIDTH; x++) {
+        for (int y = 0; y < resizeHeight; y++) {
+            for (int x = 0; x < RESIZE_WIDTH; x++) {
                 Color colorPortrait = new Color(smallPortrait.getRGB(x, y));
 
-                // Adjust tile
                 BufferedImage adjustedTile = new BufferedImage(TILE_SIZE, TILE_SIZE, BufferedImage.TYPE_INT_RGB);
                 for (int ty = 0; ty < TILE_SIZE; ty++) {
                     for (int tx = 0; tx < TILE_SIZE; tx++) {
@@ -110,22 +108,39 @@ public class CollageService {
                         adjustedTile.setRGB(tx, ty, new Color(clamp(r), clamp(g), clamp(b)).getRGB());
                     }
                 }
-
                 g2dCanvas.drawImage(adjustedTile, x * TILE_SIZE, y * TILE_SIZE, null);
             }
         }
         g2dCanvas.dispose();
 
-        // STEP 6: Save & return
+        // --- STEP 4: Downscale if too large (keeps clarity but prevents memory issues) ---
+        BufferedImage finalCanvas = canvas;
+        if (collageWidth > MAX_OUTPUT_WIDTH || collageHeight > MAX_OUTPUT_HEIGHT) {
+            double scaleX = (double) MAX_OUTPUT_WIDTH / collageWidth;
+            double scaleY = (double) MAX_OUTPUT_HEIGHT / collageHeight;
+            double scale = Math.min(scaleX, scaleY);
+
+            int newW = (int) (collageWidth * scale);
+            int newH = (int) (collageHeight * scale);
+
+            BufferedImage resized = new BufferedImage(newW, newH, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g2d = resized.createGraphics();
+            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g2d.drawImage(canvas, 0, 0, newW, newH, null);
+            g2d.dispose();
+            finalCanvas = resized;
+        }
+
+        // --- STEP 5: Save and return ---
         String filename = "collage_" + UUID.randomUUID() + ".jpg";
         File outputFile = new File(uploadDir + filename);
-        ImageIO.write(canvas, "jpg", outputFile);
+        ImageIO.write(finalCanvas, "jpg", outputFile);
 
         Collage collage = new Collage(filename, outputFile.getAbsolutePath());
         collageRepository.save(collage);
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(canvas, "jpg", baos);
+        ImageIO.write(finalCanvas, "jpg", baos);
         return baos.toByteArray();
     }
 
